@@ -1,0 +1,5 @@
+# Local MCP server config
+.mcp.json
+
+# macOS
+.DS_Store
