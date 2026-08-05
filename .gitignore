@@ -1,5 +1,19 @@
 # Local MCP server config
 .mcp.json
 
+# Secrets — never commit real key material
+.env
+.env.*
+
 # macOS
 .DS_Store
+
+# Local RunPod deployment state (pod IDs)
+.runpod/
+
+# Pipeline working directory (derived artifacts)
+work/
+
+# Python Cache
+__pycache__
+*/__pycache__
