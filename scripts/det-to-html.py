@@ -135,9 +135,15 @@ def render_block(block: dict, drop_furniture: bool) -> str:
 
 
 def plain_text(blocks: list[dict]) -> str:
-    """Reading-order text, used for scoring against the PDF's text layer."""
+    """Reading-order text, used for scoring against the PDF's text layer.
+
+    Running heads, folios and footnotes are kept here even though the HTML
+    renders them as furniture: the PDF's text layer contains them, so
+    dropping them from this side of the comparison would understate accuracy
+    by penalising the model for text it actually read correctly.
+    """
     keep = [b["body"] for b in blocks
-            if (b["category"] or "text").lower() not in DROPPED | FURNITURE]
+            if (b["category"] or "text").lower() not in DROPPED]
     return "\n\n".join(keep)
 
 
@@ -174,6 +180,8 @@ h1 { font-size: 1.6rem; } h2 { font-size: 1.3rem; } h3 { font-size: 1.1rem; }
 .footnote { font-size: .85rem; opacity: .85;
             border-left: 2px solid currentColor; padding-left: .75rem; }
 .table-wrap { overflow-x: auto; }
+.page-break { border: 0; border-top: 1px dashed currentColor; opacity: .25;
+              margin: 2rem 0; }
 table { border-collapse: collapse; width: 100%; font-size: .9rem; }
 th, td { border: 1px solid currentColor; padding: .35rem .5rem; text-align: left; }
 """
