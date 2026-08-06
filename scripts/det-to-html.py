@@ -42,6 +42,10 @@ from targets import HTML_DIR, RAW_DIR, TEXT_DIR, WORK, load_targets, select
 DET_RE = re.compile(r"<\|det\|>([^<\s]+)\s*([^<]*?)\s*<\|/det\|>(.*)", re.DOTALL)
 # Any other special token that survived skip_special_tokens=False.
 SPECIAL_TOKEN_RE = re.compile(r"<\|[^|]*\|>")
+# The model prefixes the first block of each page with a bare <PAGE> token.
+# It sits *in front of* the <|det|> marker, so it has to be stripped before
+# matching or the page's opening block silently fails to parse.
+PAGE_BREAK_RE = re.compile(r"^\s*<PAGE>\s*")
 
 HEADINGS = {
     "title": "h1", "doc_title": "h1",
@@ -52,22 +56,28 @@ HEADINGS = {
 DROPPED = {"image", "figure", "picture"}          # no pixels in an HTML dump
 FURNITURE = {"header", "footer", "page_header", "page_footer",
              "page_number", "page-number"}         # running heads, folios
-FOOTNOTES = {"footnote", "foot_note"}
+FOOTNOTES = {"footnote", "foot_note", "page_footnote"}
 TABLES = {"table"}
 FORMULAS = {"formula", "equation", "isolate_formula"}
 
 
 def clean(text: str) -> str:
-    return SPECIAL_TOKEN_RE.sub("", text).strip()
+    return SPECIAL_TOKEN_RE.sub("", text).replace("<PAGE>", "").strip()
 
 
 def parse_blocks(raw: str) -> list[dict]:
     """Split raw model output into {category, bbox, body} blocks."""
     blocks: list[dict] = []
     current: dict | None = None
+    page = 0
+    starts_page = False
 
     for line in raw.splitlines():
         line = line.rstrip()
+        if PAGE_BREAK_RE.match(line):
+            line = PAGE_BREAK_RE.sub("", line, count=1)
+            page += 1
+            starts_page = True
         if not line.strip():
             continue
         match = DET_RE.match(line)
@@ -77,11 +87,15 @@ def parse_blocks(raw: str) -> list[dict]:
             category = match.group(1).strip()
             bbox = (match.group(2) or "").strip() or None
             content = match.group(3).strip()
-            current = {"category": category, "bbox": bbox, "lines": [content] if content else []}
+            current = {"category": category, "bbox": bbox, "page": max(page, 1),
+                       "starts_page": starts_page, "lines": [content] if content else []}
+            starts_page = False
             continue
         if current is None:
             # Content before the first marker — treat as untagged body text.
-            current = {"category": None, "bbox": None, "lines": []}
+            current = {"category": None, "bbox": None, "page": max(page, 1),
+                       "starts_page": starts_page, "lines": []}
+            starts_page = False
         current["lines"].append(line)
 
     if current is not None:
@@ -96,6 +110,7 @@ def render_block(block: dict, drop_furniture: bool) -> str:
     category = (block["category"] or "text").lower()
     body = block["body"]
     attr = f' data-bbox="{html.escape(block["bbox"])}"' if block["bbox"] else ""
+    attr += f' data-page="{block.get("page", 1)}"'
 
     if category in DROPPED:
         return ""
@@ -309,7 +324,16 @@ def main() -> int:
                    HEADINGS.keys() | DROPPED | FURNITURE | FOOTNOTES | TABLES | FORMULAS
                    | {"text", "para", "paragraph", "list", "untagged"}]
 
-        body_html = "\n".join(filter(None, (render_block(b, args.drop_furniture) for b in blocks)))
+        rendered: list[str] = []
+        for block in blocks:
+            fragment = render_block(block, args.drop_furniture)
+            if not fragment:
+                continue
+            # Keep the model's page boundaries visible in the output.
+            if block.get("starts_page") and rendered:
+                rendered.append(f'<hr class="page-break" data-page="{block.get("page")}">')
+            rendered.append(fragment)
+        body_html = "\n".join(rendered)
 
         truth_path = TEXT_DIR / f"{doc_id}.txt"
         truth = truth_path.read_text(encoding="utf-8") if truth_path.is_file() else ""

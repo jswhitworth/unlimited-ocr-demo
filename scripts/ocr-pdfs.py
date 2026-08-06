@@ -38,6 +38,11 @@ POD_ID_FILE = REPO_ROOT / ".runpod" / "pod-id"
 MODEL = "baidu/Unlimited-OCR"
 MULTIPAGE_PROMPT = "<image>Multi page parsing."
 
+# RunPod fronts pod proxies with Cloudflare, which 403s the default
+# "Python-urllib/3.x" User-Agent. Any explicit UA gets through — without this
+# every request fails with 403 and the readiness probe waits forever.
+HEADERS = {"User-Agent": "unlimited-ocr-demo/1.0"}
+
 
 def base_url() -> str:
     if not POD_ID_FILE.is_file() or not POD_ID_FILE.read_text().strip():
@@ -58,11 +63,20 @@ def wait_for_server(url: str, timeout: int) -> None:
     while time.time() < deadline:
         attempt += 1
         try:
-            with urlopen(f"{url}/v1/models", timeout=15) as resp:
+            probe = Request(f"{url}/v1/models", headers=HEADERS)
+            with urlopen(probe, timeout=15) as resp:
                 if resp.status == 200:
                     print(f"  server ready after {attempt} probe(s)")
                     return
-        except (HTTPError, URLError, OSError):
+        except HTTPError as exc:
+            # 404/502 are normal while the model loads; 403 means the proxy
+            # rejected us outright and waiting will never help.
+            if exc.code == 403:
+                raise SystemExit(
+                    f"\n403 from {url} — the RunPod proxy rejected the request. "
+                    "This is not a loading delay; check the User-Agent header."
+                )
+        except (URLError, OSError):
             pass
         print(f"  waiting for model to load... ({attempt})", end="\r", flush=True)
         time.sleep(10)
@@ -102,7 +116,7 @@ def stream_completion(url: str, payload: dict, timeout: int) -> tuple[str, str |
     req = Request(
         f"{url}/v1/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **HEADERS},
         method="POST",
     )
 
